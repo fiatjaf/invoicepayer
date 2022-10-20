@@ -26,6 +26,7 @@ func main() {
 	}
 	http.HandleFunc("/", home)
 	http.HandleFunc("/pay", pay)
+	http.ListenAndServe(":5556", nil)
 }
 
 func pay(w http.ResponseWriter, r *http.Request) {
@@ -75,10 +76,7 @@ func home(w http.ResponseWriter, r *http.Request) {
 <h1>invoicepayer</h1>
 <p>this thing pays lightning invoices on signet, do not abuse</p>
 <form>
-  <label>
-    bolt11 invoice
-    <textarea name=invoice />
-  </label>
+  <textarea name=invoice placeholder="bolt11 invoice"></textarea>
   <button>pay invoice</button>
 </form>
 <style>
