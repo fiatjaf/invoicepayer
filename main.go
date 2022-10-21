@@ -59,6 +59,8 @@ func check(w http.ResponseWriter, r *http.Request) {
 	es, ok := streams.Load(hash)
 
 	if !ok {
+		closed := false
+
 		es = eventsource.New(
 			&eventsource.Settings{
 				Timeout:        5 * time.Second,
@@ -78,12 +80,18 @@ func check(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			for {
 				time.Sleep(25 * time.Second)
+				if closed {
+					return
+				}
 				es.SendEventMessage("", "keepalive", "")
 			}
 		}()
 
 		go func() {
 			time.Sleep(1 * time.Second)
+			if closed {
+				return
+			}
 			es.SendRetryMessage(3 * time.Second)
 		}()
 
@@ -100,6 +108,9 @@ func check(w http.ResponseWriter, r *http.Request) {
 			for status == "pending" {
 				result, err := ln.Call("waitsendpay", map[string]any{"payment_hash": hash})
 				if err != nil {
+					if closed {
+						return
+					}
 					es.SendEventMessage("error calling 'waitsendpay': "+err.Error(), "status", "")
 					return
 				}
@@ -109,6 +120,9 @@ func check(w http.ResponseWriter, r *http.Request) {
 				if status == "failed" {
 					result, err := ln.Call("listsendpays", map[string]any{"payment_hash": hash})
 					if err != nil {
+						if closed {
+							return
+						}
 						es.SendEventMessage("error calling 'listsendpays': "+err.Error(), "status", "")
 						return
 					}
@@ -127,10 +141,16 @@ func check(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
+				if closed {
+					return
+				}
 				es.SendEventMessage(status, "status", "")
 			}
 
 			if status == "complete" {
+				if closed {
+					return
+				}
 				es.SendEventMessage(payment.Raw, "result", "")
 			}
 		}()
@@ -142,6 +162,7 @@ func check(w http.ResponseWriter, r *http.Request) {
 				time.Sleep(2 * time.Minute)
 				if es.ConsumersCount() == 0 {
 					streams.Delete(hash)
+					closed = true
 					es.Close()
 					return // this is important so we exit this loop and don't fall in this condition again
 				}
