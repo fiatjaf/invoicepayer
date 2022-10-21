@@ -5,6 +5,7 @@
 <h3>paying <span id=hash_title></span></h3>
 
 <div id=status_container></div>
+<pre><code id=result_container></code></pre>
 
 <style>
 body {
@@ -20,6 +21,7 @@ hash_title.innerHTML = hash
 
 let es = new EventSource("/check/" + hash)
 es.addEventListener("status", e => status_container.innerHTML = e.data)
+es.addEventListener("result", e => result_container.innerHTML = e.data)
 es.onclose = e => status_container.innerHTML = 'listen closed'
 es.onerror = e => status_container.innerHTML = 'listen error'
 </script>

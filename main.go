@@ -95,6 +95,8 @@ func check(w http.ResponseWriter, r *http.Request) {
 			status := "pending"
 			es.SendEventMessage(status, "status", "")
 
+			var payment gjson.Result
+
 			for status == "pending" {
 				result, err := ln.Call("waitsendpay", map[string]any{"payment_hash": hash})
 				if err != nil {
@@ -115,6 +117,8 @@ func check(w http.ResponseWriter, r *http.Request) {
 					for _, p := range result.Get("payments").Array() {
 						if p.Get("status").String() == "pending" {
 							isPending = true
+						} else {
+							payment = p
 						}
 					}
 
@@ -124,6 +128,10 @@ func check(w http.ResponseWriter, r *http.Request) {
 				}
 
 				es.SendEventMessage(status, "status", "")
+			}
+
+			if status == "complete" {
+				es.SendEventMessage(payment.Raw, "result", "")
 			}
 		}()
 
