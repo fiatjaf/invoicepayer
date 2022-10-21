@@ -1,0 +1,25 @@
+<meta charset=utf-8>
+<title>paying</title>
+
+<h1><a href="/">invoicepayer</a></h1>
+<h3>paying <span id=hash_title></span></h3>
+
+<div id=status_container></div>
+
+<style>
+body {
+  margin: 10px auto;
+  width: 800px;
+  max-width: 90%;
+}
+</style>
+
+<script>
+let hash = location.pathname.split("/").slice(-1)[0]
+hash_title.innerHTML = hash
+
+let es = new EventSource("/check/" + hash)
+es.addEventListener("status", e => status_container.innerHTML = e.data)
+es.onclose = e => status_container.innerHTML = 'listen closed'
+es.onerror = e => status_container.innerHTML = 'listen error'
+</script>

@@ -1,99 +1,198 @@
 package main
 
 import (
-	"encoding/json"
+	_ "embed"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 
-	lnsocket "github.com/jb55/lnsocket/go"
+	lightning "github.com/fiatjaf/lightningd-gjson-rpc"
 	"github.com/kelseyhightower/envconfig"
+	decodepay "github.com/nbd-wtf/ln-decodepay"
 	"github.com/tidwall/gjson"
+	"github.com/umgefahren/tysyncmap"
+	"gopkg.in/antage/eventsource.v1"
 )
 
+//go:embed index.html
+var indexHtml []byte
+
+//go:embed pay.html
+var payHtml []byte
+
 type Settings struct {
-	CLNHost   string `envconfig:"CLN_HOST"`
-	CLNNodeId string `envconfig:"CLN_NODEID"`
-	CLNRune   string `envconfig:"CLN_RUNE"`
+	CLN string `envconfig:"CLN"`
 }
 
-var s Settings
+var (
+	s  Settings
+	ln *lightning.Client
+)
 
 func main() {
 	err := envconfig.Process("", &s)
 	if err != nil {
 		log.Fatal("couldn't process envconfig.")
 	}
+
+	ln = &lightning.Client{
+		Path:        s.CLN,
+		CallTimeout: 10 * time.Hour, // optional, defaults to 5 seconds
+	}
+
+	http.HandleFunc("/check/", check)
+	http.HandleFunc("/pay/", pay)
 	http.HandleFunc("/", home)
-	http.HandleFunc("/pay", pay)
+
+	fmt.Println("listening on http://127.0.0.1:5556")
 	http.ListenAndServe(":5556", nil)
 }
 
+var streams = new(tysyncmap.Map[string, eventsource.EventSource])
+
+func check(w http.ResponseWriter, r *http.Request) {
+	spl := strings.Split(r.URL.Path, "/")
+	hash := spl[len(spl)-1]
+
+	es, ok := streams.Load(hash)
+
+	if !ok {
+		es = eventsource.New(
+			&eventsource.Settings{
+				Timeout:        5 * time.Second,
+				CloseOnTimeout: true,
+				IdleTimeout:    1 * time.Minute,
+			},
+			func(r *http.Request) [][]byte {
+				return [][]byte{
+					[]byte("X-Accel-Buffering: no"),
+					[]byte("Cache-Control: no-cache"),
+					[]byte("Content-Type: text/event-stream"),
+					[]byte("Connection: keep-alive"),
+					[]byte("Access-Control-Allow-Origin: *"),
+				}
+			},
+		)
+		go func() {
+			for {
+				time.Sleep(25 * time.Second)
+				es.SendEventMessage("", "keepalive", "")
+			}
+		}()
+
+		go func() {
+			time.Sleep(1 * time.Second)
+			es.SendRetryMessage(3 * time.Second)
+		}()
+
+		go func() {
+			time.Sleep(1 * time.Second)
+			es.SendEventMessage("connecting", "status", "")
+			time.Sleep(1 * time.Second)
+
+			status := "pending"
+			es.SendEventMessage(status, "status", "")
+
+			for status == "pending" {
+				result, err := ln.Call("waitsendpay", map[string]any{"payment_hash": hash})
+				if err != nil {
+					es.SendEventMessage("error calling 'waitsendpay': "+err.Error(), "status", "")
+					return
+				}
+
+				status := result.Get("status").String()
+
+				if status == "failed" {
+					result, err := ln.Call("listsendpays", map[string]any{"payment_hash": hash})
+					if err != nil {
+						es.SendEventMessage("error calling 'listsendpays': "+err.Error(), "status", "")
+						return
+					}
+
+					isPending := false
+					for _, p := range result.Get("payments").Array() {
+						if p.Get("status").String() == "pending" {
+							isPending = true
+						}
+					}
+
+					if isPending {
+						status = "pending"
+					}
+				}
+
+				es.SendEventMessage(status, "status", "")
+			}
+		}()
+
+		go func() {
+			// check if this subscription has consumers every 2 minutes
+			// if not, close it
+			for {
+				time.Sleep(2 * time.Minute)
+				if es.ConsumersCount() == 0 {
+					streams.Delete(hash)
+					es.Close()
+					return // this is important so we exit this loop and don't fall in this condition again
+				}
+			}
+		}()
+
+		streams.Store(hash, es)
+	}
+
+	es.ServeHTTP(w, r)
+}
+
 func pay(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(payHtml)
+		return
+	}
+
 	inv := r.FormValue("invoice")
-	cln := lnsocket.LNSocket{}
-	cln.GenKey()
 
-	err := cln.ConnectAndInit(s.CLNHost, s.CLNNodeId)
+	bolt11, err := decodepay.Decodepay(inv)
 	if err != nil {
-		http.Error(w, "failed to connect to node", 500)
-		return
-	}
-	defer cln.Disconnect()
-
-	jparams, _ := json.Marshal(map[string]any{"bolt11": inv})
-	result, err := cln.Rpc(s.CLNRune, "pay", string(jparams))
-	if err != nil {
-		http.Error(w, "failed to call 'pay': "+err.Error(), 600)
+		http.Error(w, "invalid invoice: "+err.Error(), 400)
 		return
 	}
 
-	resErr := gjson.Get(result, "error")
-	if resErr.Type != gjson.Null {
-		msg := fmt.Sprintf("unknown: '%v'", resErr)
-
-		if resErr.Type == gjson.JSON {
-			msg = resErr.Get("message").String()
-		} else if resErr.Type == gjson.String {
-			msg = resErr.String()
+	returned := false
+	go func() {
+		result, err := ln.Call("pay", map[string]any{"bolt11": inv})
+		if err != nil {
+			http.Error(w, "failed to call 'pay': "+err.Error(), 600)
+			returned = true
+			return
 		}
 
-		http.Error(w, "failed to pay: "+msg, 400)
+		resErr := result.Get("error")
+		if resErr.Type != gjson.Null {
+			msg := fmt.Sprintf("unknown: '%v'", resErr)
 
-		return
+			if resErr.Type == gjson.JSON {
+				msg = resErr.Get("message").String()
+			} else if resErr.Type == gjson.String {
+				msg = resErr.String()
+			}
+
+			http.Error(w, "failed to pay: "+msg, 400)
+			returned = true
+			return
+		}
+	}()
+
+	time.Sleep(1 * time.Second)
+	if !returned {
+		http.Redirect(w, r, "/pay/"+bolt11.PaymentHash, http.StatusFound)
 	}
-
-	w.Header().Add("content-type", "text/plain")
-	fmt.Fprintln(w, "paid!")
-	fmt.Fprintln(w, result)
 }
 
 func home(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(`
-<meta charset=utf-8>
-<title>invoicepayer</title>
-<h1>invoicepayer</h1>
-<p>this thing pays lightning invoices on signet, do not abuse</p>
-<form>
-  <textarea name=invoice placeholder="bolt11 invoice"></textarea>
-  <button>pay invoice</button>
-</form>
-<style>
-body {
-  margin: 10px auto;
-  width: 800px;
-  max-width: 90%;
-}
-textarea {
-  width: 100%;
-  height: 300px;
-}
-button {
-  display: block;
-  padding: 2px;
-  font-size: 1.5em;
-}
-</style>
-`))
+	w.Write(indexHtml)
 }

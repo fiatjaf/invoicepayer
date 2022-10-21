@@ -3,14 +3,17 @@ module github.com/fiatjaf/invoicepayer
 go 1.18
 
 require (
-	github.com/jb55/lnsocket/go v0.0.0-20220812055138-93307d1bfe4c
+	github.com/fiatjaf/lightningd-gjson-rpc v1.6.1
 	github.com/kelseyhightower/envconfig v1.4.0
+	github.com/nbd-wtf/ln-decodepay v1.11.1
 	github.com/tidwall/gjson v1.14.3
+	github.com/umgefahren/tysyncmap v0.1.2
+	gopkg.in/antage/eventsource.v1 v1.0.0-20150318155416-803f4c5af225
 )
 
 require (
 	github.com/aead/siphash v1.0.1 // indirect
-	github.com/btcsuite/btcd v0.23.1 // indirect
+	github.com/btcsuite/btcd v0.23.2 // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.2.0 // indirect
 	github.com/btcsuite/btcd/btcutil v1.1.1 // indirect
 	github.com/btcsuite/btcd/btcutil/psbt v1.1.4 // indirect

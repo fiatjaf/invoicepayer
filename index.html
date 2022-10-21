@@ -1,0 +1,26 @@
+<meta charset=utf-8>
+<title>invoicepayer</title>
+
+<h1><a href="/">invoicepayer</a></h1>
+<p>this thing pays lightning invoices on signet, do not abuse</p>
+<form action=/pay/ method=post>
+  <textarea name=invoice placeholder="bolt11 invoice"></textarea>
+  <button>pay invoice</button>
+</form>
+
+<style>
+body {
+  margin: 10px auto;
+  width: 800px;
+  max-width: 90%;
+}
+textarea {
+  width: 100%;
+  height: 300px;
+}
+button {
+  display: block;
+  padding: 2px;
+  font-size: 1.5em;
+}
+</style>
